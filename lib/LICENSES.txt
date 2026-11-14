@@ -1,0 +1,4 @@
+Bibliotecas incluídas (código aberto):
+- docx 9.8.1 — MIT — https://github.com/dolanmiu/docx
+- pdf-lib 1.17.1 — MIT — https://github.com/Hopding/pdf-lib
+- pdf.js (pdfjs-dist) 6.2.108 — Apache-2.0 — https://github.com/mozilla/pdf.js

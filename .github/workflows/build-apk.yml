@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+permissions:
+  contents: write
+concurrency: { group: apk, cancel-in-progress: true }
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -26,3 +29,10 @@ jobs:
         with:
           name: EnsaiosPro-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Publicar APK no link fixo (Releases)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk EnsaiosPro.apk
+          gh release delete apk --yes --cleanup-tag || true
+          gh release create apk EnsaiosPro.apk --title "Ensaios Pro — APK mais recente" --notes "Abra este link no celular, baixe EnsaiosPro.apk e instale. Antes de atualizar, faça Backup (.json) no app e desinstale a versão anterior." --latest
+

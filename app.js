@@ -8,20 +8,21 @@
   var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
   var isNative = function () { return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); };
 
+  // Bibliotecas embutidas no app (funcionam sem internet). Só o login Google é externo.
   var LIBS = {
-    docx: 'https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.js',
-    jspdf: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
-    pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
-    pdfWorker: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
-    mammoth: 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js',
+    docx: 'lib/docx.js',
+    pdflib: 'lib/pdf-lib.min.js',
+    pdfjs: 'lib/pdf.min.js',
+    pdfWorker: 'lib/pdf.worker.min.js',
     gis: 'https://accounts.google.com/gsi/client'
   };
+  var absUrl = function (u) { return new URL(u, location.href).href; };
   var loaded = {};
   function loadScript(src) {
     if (!loaded[src]) loaded[src] = new Promise(function (res, rej) {
       var s = document.createElement('script');
       s.src = src; s.onload = res;
-      s.onerror = function () { delete loaded[src]; rej(new Error('Não foi possível carregar um componente. Conecte-se à internet e tente de novo.')); };
+      s.onerror = function () { delete loaded[src]; rej(new Error(src.indexOf('http') === 0 ? 'Não foi possível conectar ao Google. Verifique a internet.' : 'Não foi possível carregar um componente do app (' + src + ').')); };
       document.head.appendChild(s);
     });
     return loaded[src];
@@ -82,20 +83,58 @@
   }
 
   /* ---------- leitura de anexos ---------- */
+  var pdfjsP = null;
+  function getPdfjs() {
+    if (!pdfjsP) pdfjsP = import(absUrl(LIBS.pdfjs)).then(function (m) { m.GlobalWorkerOptions.workerSrc = absUrl(LIBS.pdfWorker); return m; })
+      .catch(function (e) { pdfjsP = null; throw new Error('Não foi possível abrir o leitor de PDF: ' + e.message); });
+    return pdfjsP;
+  }
+  async function pdfText(buf) {
+    var lib = await getPdfjs();
+    var d = await lib.getDocument({ data: new Uint8Array(buf) }).promise, out = [];
+    for (var i = 1; i <= d.numPages; i++) {
+      var c = await (await d.getPage(i)).getTextContent(), line = '';
+      c.items.forEach(function (x) { line += x.str + (x.hasEOL ? '\n' : ' '); });
+      out.push(line);
+    }
+    return out.join('\n\n');
+  }
+  // Leitor de .docx sem dependências: abre o zip e extrai o texto de word/document.xml
+  async function inflateRaw(u8) {
+    if (typeof DecompressionStream === 'undefined') throw new Error('Este navegador não consegue ler .docx; envie o arquivo em PDF ou TXT.');
+    var st = new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Uint8Array(await new Response(st).arrayBuffer());
+  }
+  async function docxText(buf) {
+    var u8 = new Uint8Array(buf), dv = new DataView(buf), e = -1, dec = new TextDecoder('utf-8');
+    for (var i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
+    if (e < 0) throw new Error('Arquivo .docx inválido ou corrompido.');
+    var n = dv.getUint16(e + 10, true), off = dv.getUint32(e + 16, true), xml = null;
+    for (var k = 0; k < n && dv.getUint32(off, true) === 0x02014b50; k++) {
+      var method = dv.getUint16(off + 10, true), csize = dv.getUint32(off + 20, true);
+      var nlen = dv.getUint16(off + 28, true), xlen = dv.getUint16(off + 30, true), clen = dv.getUint16(off + 32, true);
+      var lho = dv.getUint32(off + 42, true), name = dec.decode(u8.subarray(off + 46, off + 46 + nlen));
+      if (name === 'word/document.xml') {
+        var start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
+        var data = u8.subarray(start, start + csize);
+        xml = dec.decode(method === 0 ? data : await inflateRaw(data));
+        break;
+      }
+      off += 46 + nlen + xlen + clen;
+    }
+    if (xml == null) throw new Error('Não encontrei o texto dentro do .docx.');
+    var ent = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+    return xml.replace(/<w:tab\/>/g, '\t').replace(/<w:br[^>]*\/>/g, '\n').replace(/<\/w:p>/g, '\n').replace(/<[^>]+>/g, '')
+      .replace(/&(#x?[0-9a-f]+|\w+);/gi, function (m, c) {
+        if (c[0] === '#') return String.fromCodePoint(c[1] === 'x' || c[1] === 'X' ? parseInt(c.slice(2), 16) : parseInt(c.slice(1), 10));
+        return ent[c] || m;
+      }).replace(/\n{3,}/g, '\n\n').trim();
+  }
   async function readFile(f) {
     var n = f.name.toLowerCase();
-    if (n.endsWith('.pdf')) {
-      await loadScript(LIBS.pdf);
-      var w = await (await fetch(LIBS.pdfWorker)).text();
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([w], { type: 'text/javascript' }));
-      var d = await window.pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise, t = '';
-      for (var i = 1; i <= d.numPages; i++) { var pg = await d.getPage(i), c = await pg.getTextContent(); t += c.items.map(function (x) { return x.str; }).join(' ') + '\n\n'; }
-      return t;
-    }
-    if (n.endsWith('.docx')) {
-      await loadScript(LIBS.mammoth);
-      return (await window.mammoth.extractRawText({ arrayBuffer: await f.arrayBuffer() })).value;
-    }
+    if (n.endsWith('.pdf')) return pdfText(await f.arrayBuffer());
+    if (n.endsWith('.docx')) return docxText(await f.arrayBuffer());
+    if (n.endsWith('.doc')) throw new Error(f.name + ': formato .doc antigo; salve como .docx ou PDF.');
     return await f.text();
   }
 
@@ -156,9 +195,11 @@
     if (isNative() && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
       var b64 = await new Promise(function (res) { var r = new FileReader(); r.onload = function () { res(String(r.result).split(',')[1]); }; r.readAsDataURL(blob); });
       var w = await window.Capacitor.Plugins.Filesystem.writeFile({ path: name, data: b64, directory: 'CACHE' });
-      await window.Capacitor.Plugins.Share.share({ title: name, url: w.uri, dialogTitle: 'Salvar ou enviar' });
+      try { await window.Capacitor.Plugins.Share.share({ title: name, url: w.uri, dialogTitle: 'Salvar ou enviar' }); }
+      catch (e) { if (!/cancel/i.test(String(e && e.message))) throw e; }
       return;
     }
+    if (isNative()) throw new Error('Exportação indisponível nesta instalação do app. Reinstale o APK mais recente.');
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
@@ -189,36 +230,82 @@
     return D.Packer.toBlob(doc);
   }
 
+  // PDF A4 com fontes Times (ABNT: margens 3/2/3/2 cm, corpo 12, entrelinha 1,5, recuo 1,25 cm)
   async function buildPdf(p) {
-    await loadScript(LIBS.jspdf);
-    var d = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
-    var L = 30, T = 30, R = 20, B = 20, W = 210 - L - R, y = T, lh = 6.4;
-    var ensure = function (h) { if (y + h > 297 - B) { d.addPage(); y = T; } };
-    var para = function (text, size, style, gap, justify, newPage) {
-      if (newPage) { d.addPage(); y = T; }
-      d.setFont('times', style); d.setFontSize(size);
-      var lines = d.splitTextToSize(text, W);
-      lines.forEach(function (ln, i) {
-        ensure(lh);
-        if (justify && i < lines.length - 1) d.text(ln, L, y, { align: 'justify', maxWidth: W }); else d.text(ln, L, y);
-        y += lh;
-      });
-      y += gap;
+    await loadScript(LIBS.pdflib);
+    var PL = window.PDFLib, doc = await PL.PDFDocument.create();
+    doc.setTitle(p.title || 'Sem título'); if (p.author) doc.setAuthor(p.author); doc.setCreator('Ensaios Pro');
+    var F = {
+      n: await doc.embedFont(PL.StandardFonts.TimesRoman), b: await doc.embedFont(PL.StandardFonts.TimesRomanBold),
+      i: await doc.embedFont(PL.StandardFonts.TimesRomanItalic), bi: await doc.embedFont(PL.StandardFonts.TimesRomanBoldItalic)
     };
-    var blocks = Core.toBlocks(p, { refs: S.set.includeRefs }), first = true;
-    blocks.forEach(function (b) {
-      if (b.t === 'title') { d.setFont('times', 'bold'); d.setFontSize(18); var tl = d.splitTextToSize(b.x.toUpperCase(), W); var yy = 100; tl.forEach(function (l) { d.text(l, 105, yy, { align: 'center' }); yy += 9; }); }
-      else if (b.t === 'subtitle') { d.setFont('times', 'italic'); d.setFontSize(13); d.text(b.x, 105, 135, { align: 'center', maxWidth: W }); }
-      else if (b.t === 'author') { d.setFont('times', 'normal'); d.setFontSize(12); d.text(b.x, 105, 200, { align: 'center' }); }
-      else if (b.t === 'h1') { para(b.x.toUpperCase(), 14, 'bold', 6, false, true); first = false; }
-      else if (b.t === 'h2') { ensure(lh * 3); y += 4; para(b.x, 13, 'bold', 3, false, false); }
-      else if (b.t === 'h3') { ensure(lh * 3); y += 2; para(b.x, 12, 'bolditalic', 2, false, false); }
-      else if (b.t === 'ref') para(b.x, 10.5, 'normal', 1.5, false, false);
-      else para(b.x, 12, 'normal', 2.2, true, false);
+    var MM = 72 / 25.4, PW = 595.28, PH = 841.89, L = 30 * MM, R = 20 * MM, T = 30 * MM, B = 20 * MM, W = PW - L - R;
+    var ink = PL.rgb(0, 0, 0), page = null, y = 0, ok = {};
+    // As fontes padrão do PDF só têm o alfabeto latino (WinAnsi); outros caracteres viram equivalentes
+    var MAP = { ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', '‐': '-', '‑': '-', '−': '-', '­': '', '​': '', '﻿': '', '′': "'", '″': '"', '«': '«', '»': '»' };
+    // Grego e cirílico são transliterados (λόγος → logos), pois as fontes do PDF não os contêm. O .docx mantém o original.
+    var GR = { α: 'a', β: 'b', γ: 'g', δ: 'd', ε: 'e', ζ: 'z', η: 'e', θ: 'th', ι: 'i', κ: 'k', λ: 'l', μ: 'm', ν: 'n', ξ: 'x', ο: 'o', π: 'p', ρ: 'r', σ: 's', ς: 's', τ: 't', υ: 'y', φ: 'ph', χ: 'ch', ψ: 'ps', ω: 'o',
+      а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'i', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'kh', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'shch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'iu', я: 'ia' };
+    var translit = function (ch) {
+      var base = ch.normalize('NFD').replace(/[\u0300-\u036f]/g, ''), low = base.toLowerCase(), r = GR[low];
+      if (r == null) return null;
+      return base !== low && r ? r[0].toUpperCase() + r.slice(1) : r;
+    };
+    var clean = function (t) {
+      return Array.from(String(t).normalize('NFC')).map(function (ch) {
+        if (MAP[ch] != null) ch = MAP[ch];
+        var tr = /[\u0370-\u03ff\u1f00-\u1fff\u0400-\u04ff]/.test(ch) ? translit(ch) : null;
+        if (tr != null) return tr;
+        if (ch === '' || ok[ch] === true) return ch;
+        if (ok[ch] === false) return '?';
+        try { F.n.encodeText(ch); ok[ch] = true; return ch; } catch (e) { ok[ch] = false; return '?'; }
+      }).join('');
+    };
+    var newPage = function () { page = doc.addPage([PW, PH]); y = PH - T; };
+    var wrap = function (text, font, size, width, indent) {
+      var words = clean(text).split(/\s+/).filter(Boolean), lines = [], cur = [], curW = 0, sp = font.widthOfTextAtSize(' ', size);
+      words.forEach(function (w) {
+        var ww = font.widthOfTextAtSize(w, size), avail = width - (lines.length ? 0 : indent);
+        if (cur.length && curW + sp + ww > avail) { lines.push(cur); cur = []; curW = 0; }
+        curW += (cur.length ? sp : 0) + ww; cur.push(w);
+      });
+      if (cur.length) lines.push(cur);
+      return lines;
+    };
+    var para = function (text, font, size, opt) {
+      opt = opt || {};
+      var lh = size * (opt.lh || 1.5), indent = opt.indent || 0, lines = wrap(text, font, size, W, indent);
+      if (opt.keep && y - lh * Math.min(3, lines.length + 1) < B) newPage();
+      lines.forEach(function (ws, li) {
+        if (y - size < B) newPage();
+        var x = L + (li === 0 ? indent : 0), avail = W - (li === 0 ? indent : 0);
+        if (opt.center) {
+          var s = ws.join(' ');
+          page.drawText(s, { x: L + (W - font.widthOfTextAtSize(s, size)) / 2, y: y - size, size: size, font: font, color: ink });
+        } else if (opt.justify && li < lines.length - 1 && ws.length > 1) {
+          var tw = ws.reduce(function (a, w) { return a + font.widthOfTextAtSize(w, size); }, 0), gap = (avail - tw) / (ws.length - 1);
+          ws.forEach(function (w) { page.drawText(w, { x: x, y: y - size, size: size, font: font, color: ink }); x += font.widthOfTextAtSize(w, size) + gap; });
+        } else {
+          page.drawText(ws.join(' '), { x: x, y: y - size, size: size, font: font, color: ink });
+        }
+        y -= lh;
+      });
+      y -= opt.after || 0;
+    };
+    newPage(); // capa
+    Core.toBlocks(p, { refs: S.set.includeRefs }).forEach(function (b) {
+      if (b.t === 'title') { y = PH - 280; para(b.x.toUpperCase(), F.b, 18, { center: true, lh: 1.3, after: 14 }); }
+      else if (b.t === 'subtitle') para(b.x, F.i, 13, { center: true, lh: 1.3 });
+      else if (b.t === 'author') { y = Math.min(y, PH - 560); para(b.x, F.n, 12, { center: true }); }
+      else if (b.t === 'h1') { newPage(); para(b.x.toUpperCase(), F.b, 14, { lh: 1.3, after: 18 }); }
+      else if (b.t === 'h2') { y -= 10; para(b.x, F.b, 13, { keep: true, lh: 1.3, after: 8 }); }
+      else if (b.t === 'h3') { y -= 6; para(b.x, F.bi, 12, { keep: true, lh: 1.3, after: 6 }); }
+      else if (b.t === 'ref') para(b.x, F.n, 10.5, { lh: 1.2, after: 4 });
+      else para(b.x, F.n, 12, { justify: true, indent: 12.5 * MM, after: 6 });
     });
-    var n = d.getNumberOfPages();
-    for (var i = 2; i <= n; i++) { d.setPage(i); d.setFont('times', 'normal'); d.setFontSize(10); d.text(String(i), 210 - R, 297 - 10, { align: 'right' }); }
-    return d.output('blob');
+    var pages = doc.getPages();
+    pages.forEach(function (pg, i) { if (i > 0) { var s = String(i + 1); pg.drawText(s, { x: PW - R - F.n.widthOfTextAtSize(s, 10), y: 10 * MM, size: 10, font: F.n, color: ink }); } });
+    return new Blob([await doc.save()], { type: 'application/pdf' });
   }
 
   async function doExport(kind) {
@@ -299,8 +386,10 @@
     } catch (e) { toast(e.message); }
   }
   async function backupLocal() {
-    S.projects = await DB.all();
-    await saveBlob(new Blob([JSON.stringify({ v: 1, projects: S.projects })], { type: 'application/json' }), 'ensaios-pro-backup.json');
+    try {
+      S.projects = await DB.all();
+      await saveBlob(new Blob([JSON.stringify({ v: 1, projects: S.projects })], { type: 'application/json' }), 'ensaios-pro-backup.json');
+    } catch (e) { toast(e.message); }
   }
 
   /* ---------- views ---------- */
@@ -317,7 +406,8 @@
   }
 
   function renderObras() {
-    var h = '<h2>Suas obras</h2><button class="b red" id="nova">+ Nova obra</button>';
+    var h = '<h2>Suas obras</h2><button class="b red" id="nova">+ Nova obra</button>' +
+      '<label class="b ghost" style="display:inline-block;width:auto;color:var(--ink);font-size:15px">Importar backup (.json)<input type="file" id="imp" accept=".json,application/json" hidden></label>';
     if (!S.projects.length) h += '<p class="mut">Nenhuma obra ainda. Tudo fica salvo neste aparelho, sem precisar de login.</p>';
     S.projects.sort(function (a, b) { return b.updated - a.updated; }).forEach(function (p) {
       var n = 0, d = 0; p.chapters.forEach(function (c) { c.sections.forEach(function (s) { n++; if (s.raw) d++; }); });
@@ -326,6 +416,16 @@
     });
     $('#v-obras').innerHTML = h;
     $('#nova').onclick = function () { S.cur = newProject(); go('obra'); };
+    $('#imp').onchange = async function (ev) {
+      var f = ev.target.files[0]; if (!f) return;
+      try {
+        var j = JSON.parse(await f.text()), list = j && Array.isArray(j.projects) ? j.projects : null;
+        if (!list) throw new Error('Este arquivo não é um backup do Ensaios Pro.');
+        var n = 0;
+        for (var i = 0; i < list.length; i++) { var p = list[i]; if (p && p.id && Array.isArray(p.chapters)) { await DB.put(p); n++; } }
+        S.projects = await DB.all(); renderObras(); toast(n + ' obra(s) importada(s)');
+      } catch (e) { toast(e instanceof SyntaxError ? 'Arquivo de backup inválido.' : e.message); }
+    };
     $('#v-obras').querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { S.cur = S.projects.find(function (p) { return p.id === b.dataset.open; }); go('obra'); }; });
     $('#v-obras').querySelectorAll('[data-del]').forEach(function (b) { b.onclick = async function () { if (!confirm('Excluir esta obra?')) return; await DB.del(b.dataset.del); S.projects = await DB.all(); if (S.cur && S.cur.id === b.dataset.del) S.cur = null; renderObras(); }; });
   }
@@ -359,7 +459,7 @@
       '<label>Roteiro — use "# Título" para cada capítulo; cada linha abaixo vira uma seção (700–1100 palavras) </label>' +
       '<textarea id="f-rot" class="big" placeholder="# Origens do problema&#10;Mito e logos&#10;Os sofistas&#10;# Modernidade&#10;Descartes e a dúvida">' + esc(p.roteiro) + '</textarea>' +
       '<button class="b ghost" id="b-rot">Sugerir roteiro com IA a partir do tema</button>' +
-      '<h3>Anexos (fonte para o texto)</h3><input type="file" id="f-att" multiple accept=".pdf,.docx,.txt,.md"><div id="att"></div>' +
+      '<h3>Anexos (fonte para o texto)</h3><input type="file" id="f-att" multiple accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"><div id="att"></div>' +
       '<p><button class="b" id="b-save">Salvar obra</button></p>' +
       '<h2>Geração</h2><div id="secs"></div>' +
       '<button class="b red" id="b-all">Gerar o que falta</button><button class="b ghost" id="b-redo">Refazer tudo</button>' +
@@ -467,7 +567,7 @@
       '<div><label>Citações diretas % (mín.)</label><input id="c-dir" type="number" value="' + s.dir + '"></div></div>' +
       '<div class="mut">Percentuais sobre as palavras do corpo do texto. A IA mede e refaz até 3 vezes para cumprir.</div></div>' +
       '<div class="card"><b>Seu estilo de escrita</b><label>Nome do autor</label><input id="c-author" value="' + esc(s.author) + '">' +
-      '<label>Envie 2 a 3 textos seus (.pdf, .docx, .txt)</label><input type="file" id="c-samples" multiple accept=".pdf,.docx,.txt,.md">' +
+      '<label>Envie 2 a 3 textos seus (.pdf, .docx, .txt)</label><input type="file" id="c-samples" multiple accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown">' +
       '<div class="mut">' + s.samples.length + ' amostra(s) guardada(s)</div><button class="b ghost" id="c-ext">Extrair perfil de estilo</button><button class="b ghost" id="c-clr">Limpar amostras</button>' +
       '<label>Perfil de estilo (editável)</label><textarea id="c-style">' + esc(s.style) + '</textarea></div>' +
       '<div class="card"' + (isNative() ? ' hidden' : '') + '><b>Google (opcional)</b><label>Client ID OAuth (tipo “Aplicativo da Web”)</label><input id="c-gid" value="' + esc(s.googleClientId) + '" placeholder="xxxx.apps.googleusercontent.com"><div class="mut">Sem isso o app funciona normalmente, só não envia ao Drive.</div></div>' +
@@ -509,5 +609,5 @@
   /* ---------- init ---------- */
   document.querySelectorAll('nav button').forEach(function (b) { b.onclick = function () { if (S.view === 'obra') syncForm(); if (S.view === 'config') readCfg(); go(b.dataset.v); }; });
   DB.open().then(DB.all.bind(DB)).then(function (all) { S.projects = all; go('obras'); }).catch(function () { toast('Armazenamento local indisponível neste navegador.'); go('config'); });
-  if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) navigator.serviceWorker.register('sw.js').catch(function () {});
+  if (!isNative() && 'serviceWorker' in navigator && location.protocol.indexOf('http') === 0) navigator.serviceWorker.register('sw.js').catch(function () {});
 })();
