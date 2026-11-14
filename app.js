@@ -29,6 +29,7 @@
   }
 
   /* ---------- estado e armazenamento ---------- */
+  var APP_VERSION = '2.2';
   var PROVIDERS_IDS = /^(gemini|nvidia|anthropic|openrouter|groq|xai|github|openai|deepseek|mistral|outro)$/;
   var DEF = { provider: 'gemini', keys: {}, models: {}, customBase: '', proxyUrl: '', accessCode: '', author: 'Thiago Carvalho', min: 700, max: 1100, cit: 10, ane: 5, dir: 2, googleClientId: '', style: '', samples: [], includeRefs: true };
   var S = { set: loadSet(), projects: [], cur: null, view: 'obras', busy: false, token: null };
@@ -714,7 +715,7 @@
       '<div class="mut">' + s.samples.length + ' amostra(s) guardada(s)</div><button class="b ghost" id="c-ext">Extrair perfil de estilo</button><button class="b ghost" id="c-clr">Limpar amostras</button>' +
       '<label>Perfil de estilo (editável)</label><textarea id="c-style">' + esc(s.style) + '</textarea></div>' +
       '<div class="card"' + (isNative() ? ' hidden' : '') + '><b>Google (opcional)</b><label>Client ID OAuth (tipo “Aplicativo da Web”)</label><input id="c-gid" value="' + esc(s.googleClientId) + '" placeholder="xxxx.apps.googleusercontent.com"><div class="mut">Sem isso o app funciona normalmente, só não envia ao Drive.</div></div>' +
-      '<button class="b red" id="c-save">Salvar configurações</button>';
+      '<button class="b red" id="c-save">Salvar configurações</button><p class="mut">Ensaios Pro ' + APP_VERSION + '</p>';
     $('#v-config').innerHTML = h;
     var info = function () {
       var id = $('#c-prov').value, P = PROVIDERS[id];
@@ -782,5 +783,10 @@
   /* ---------- init ---------- */
   document.querySelectorAll('nav button').forEach(function (b) { b.onclick = function () { if (S.view === 'obra') syncForm(); if (S.view === 'config') readCfg(); go(b.dataset.v); }; });
   DB.open().then(DB.all.bind(DB)).then(function (all) { S.projects = all; go('obras'); }).catch(function () { toast('Armazenamento local indisponível neste navegador.'); go('config'); });
-  if (!isNative() && 'serviceWorker' in navigator && location.protocol.indexOf('http') === 0) navigator.serviceWorker.register('sw.js').catch(function () {});
+  if (!isNative() && 'serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+    // Ao publicar uma versão nova, o app atualiza e recarrega sozinho (uma vez)
+    var hadCtrl = !!navigator.serviceWorker.controller, reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function () { if (hadCtrl && !reloaded) { reloaded = true; if (S.view === 'obra') syncForm(); persist(); location.reload(); } });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) { reg.update().catch(function () {}); }).catch(function () {});
+  }
 })();
