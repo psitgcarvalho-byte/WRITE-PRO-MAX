@@ -81,8 +81,8 @@
     groq: { nome: 'Groq (grátis)', tipo: 'openai', base: 'https://api.groq.com/openai/v1', modelo: '', prefixo: /^gsk_/, ajuda: 'Chave em console.groq.com/keys.' },
     xai: { nome: 'xAI (Grok)', tipo: 'openai', base: 'https://api.x.ai/v1', modelo: '', prefixo: /^xai-/, ajuda: 'Chave em console.x.ai.' },
     github: { nome: 'GitHub Models', tipo: 'openai', base: 'https://models.github.ai/inference', modelo: '', prefixo: /^(ghp_|github_pat_)/, ajuda: 'Token do GitHub com permissão "models".' },
+    deepseek: { nome: 'DeepSeek (barato)', tipo: 'openai', base: 'https://api.deepseek.com/v1', modelo: 'deepseek-chat', prefixo: /^sk-[0-9a-f]{32}$/, ajuda: 'Chave em platform.deepseek.com. Cobra por uso, com preço baixo.' },
     openai: { nome: 'OpenAI (ChatGPT)', tipo: 'openai', base: 'https://api.openai.com/v1', modelo: '', prefixo: /^sk-(proj-|svcacct-|admin-)?/, ajuda: 'Chave em platform.openai.com/api-keys.' },
-    deepseek: { nome: 'DeepSeek', tipo: 'openai', base: 'https://api.deepseek.com/v1', modelo: 'deepseek-chat', ajuda: 'Chave em platform.deepseek.com.' },
     mistral: { nome: 'Mistral', tipo: 'openai', base: 'https://api.mistral.ai/v1', modelo: '', ajuda: 'Chave em console.mistral.ai.' },
     outro: { nome: 'Outro serviço (compatível com OpenAI)', tipo: 'openai', base: '', modelo: '', ajuda: 'Informe o endereço base da API (ex.: https://servico.com/v1).' }
   };

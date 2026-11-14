@@ -162,7 +162,9 @@ const short = `<TITULO>Curto</TITULO><TEXTO>\n### A\n${W(300)}\n</TEXTO><REFS>[]
   await p4.fill('#c-key', 'nvapi-xyz'); const g2 = await p4.inputValue('#c-prov');
   await p4.fill('#c-key', 'gsk_abc'); const g3 = await p4.inputValue('#c-prov');
   await p4.fill('#c-key', 'sk-ant-api03-x'); const g4 = await p4.inputValue('#c-prov');
-  t('Reconhece Gemini, NVIDIA, Groq e Claude', [g1, g2, g3, g4].join() === 'gemini,nvidia,groq,anthropic', [g1, g2, g3, g4].join());
+  await p4.fill('#c-key', 'sk-0123456789abcdef0123456789abcdef'); const g5 = await p4.inputValue('#c-prov');
+  await p4.fill('#c-key', 'sk-proj-AbCdEfGhIjKlMnOpQrStUv123'); const g6 = await p4.inputValue('#c-prov');
+  t('Reconhece Gemini, NVIDIA, Groq, Claude, DeepSeek e OpenAI', [g1, g2, g3, g4, g5, g6].join() === 'gemini,nvidia,groq,anthropic,deepseek,openai', [g1, g2, g3, g4, g5, g6].join());
   await p4.fill('#c-key', 'sk-or-v1-abc123'); await p4.fill('#c-model', '');
   await p4.click('#c-test');
   await p4.waitForFunction(() => /✓|✗/.test(document.querySelector('#c-test-out').textContent), null, { timeout: 8000 }).catch(() => {});
