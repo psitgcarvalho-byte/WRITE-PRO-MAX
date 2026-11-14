@@ -1,0 +1,15 @@
+{
+  "name": "Ensaios Pro",
+  "short_name": "Ensaios Pro",
+  "description": "Gerador de ensaios e livros no seu estilo, com exportação em DOCX e PDF.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ECE7DC",
+  "theme_color": "#ECE7DC",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

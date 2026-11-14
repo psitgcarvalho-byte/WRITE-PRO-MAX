@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ECE7DC">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Ensaios Pro</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>Ensaios <span>Pro</span></h1>
+  <nav>
+    <button data-v="obras" class="on">Obras</button>
+    <button data-v="obra">Obra</button>
+    <button data-v="texto">Texto</button>
+    <button data-v="config">Config.</button>
+  </nav>
+</header>
+<main>
+  <section id="v-obras"></section>
+  <section id="v-obra" hidden></section>
+  <section id="v-texto" hidden></section>
+  <section id="v-config" hidden></section>
+</main>
+<div id="toast" role="status"></div>
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

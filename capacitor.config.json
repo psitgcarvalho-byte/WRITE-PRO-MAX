@@ -1,0 +1,7 @@
+{
+  "appId": "br.com.thiagocarvalho.ensaiospro",
+  "appName": "Ensaios Pro",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "android": { "allowMixedContent": false }
+}
