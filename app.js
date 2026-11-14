@@ -29,10 +29,22 @@
   }
 
   /* ---------- estado e armazenamento ---------- */
-  var DEF = { apiKey: '', model: 'claude-sonnet-5-5', proxyUrl: '', accessCode: '', author: 'Thiago Carvalho', min: 700, max: 1100, cit: 10, ane: 5, dir: 2, googleClientId: '', style: '', samples: [], includeRefs: true };
+  var PROVIDERS_IDS = /^(gemini|nvidia|anthropic|openrouter|groq|xai|github|openai|deepseek|mistral|outro)$/;
+  var DEF = { provider: 'gemini', keys: {}, models: {}, customBase: '', proxyUrl: '', accessCode: '', author: 'Thiago Carvalho', min: 700, max: 1100, cit: 10, ane: 5, dir: 2, googleClientId: '', style: '', samples: [], includeRefs: true };
   var S = { set: loadSet(), projects: [], cur: null, view: 'obras', busy: false, token: null };
 
-  function loadSet() { try { return Object.assign({}, DEF, JSON.parse(localStorage.getItem('ep_set') || '{}')); } catch (e) { return Object.assign({}, DEF); } }
+  function loadSet() {
+    var o; try { o = Object.assign({}, DEF, JSON.parse(localStorage.getItem('ep_set') || '{}')); } catch (e) { o = Object.assign({}, DEF); }
+    o.keys = Object.assign({}, o.keys || {}); o.models = Object.assign({}, o.models || {});
+    // migração da versão anterior (uma chave por campo)
+    [['gmKey', 'gemini', 'gmModel'], ['nvKey', 'nvidia', 'nvModel'], ['apiKey', 'anthropic', 'model']].forEach(function (m) {
+      if (o[m[0]] && !o.keys[m[1]]) o.keys[m[1]] = o[m[0]];
+      if (o[m[2]] && !o.models[m[1]] && !(m[1] === 'anthropic' && o[m[2]] === 'claude-sonnet-5-5')) o.models[m[1]] = o[m[2]];
+      delete o[m[0]]; delete o[m[2]];
+    });
+    if (!o.provider || !PROVIDERS_IDS.test(o.provider)) o.provider = o.keys.anthropic && !o.keys.gemini ? 'anthropic' : 'gemini';
+    return o;
+  }
   function saveSet() { localStorage.setItem('ep_set', JSON.stringify(S.set)); }
   function targets() { return { min: +S.set.min, max: +S.set.max, cit: S.set.cit / 100, ane: S.set.ane / 100, dir: S.set.dir / 100 }; }
 
@@ -59,27 +71,127 @@
   function slug(s) { return String(s || 'obra').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 50) || 'obra'; }
 
   /* ---------- API de IA ---------- */
+  /* ---------- serviços de IA: qualquer chave de API ---------- */
+  // tipo: 'openai' = padrão OpenAI (/chat/completions), usado pela maioria dos serviços
+  var PROVIDERS = {
+    gemini: { nome: 'Google Gemini (grátis)', tipo: 'gemini', modelo: 'gemini-4-hydrogen', prefixo: /^AIza/, ajuda: 'Chave em aistudio.google.com → Chaves de API. No plano grátis o Google pode usar os textos para melhorar seus produtos.' },
+    nvidia: { nome: 'NVIDIA (grátis, só no app do celular)', tipo: 'openai', base: 'https://integrate.api.nvidia.com/v1', modelo: 'google/gemma-4-31b-it', prefixo: /^nvapi-/, semNavegador: true, ajuda: 'Chave em build.nvidia.com. Modelo testado: Gemma 4 31B.' },
+    anthropic: { nome: 'Claude / Anthropic (pago, melhor qualidade)', tipo: 'anthropic', modelo: 'claude-sonnet-5-5', prefixo: /^sk-ant-/, ajuda: 'Chave em console.anthropic.com (exige créditos).' },
+    openrouter: { nome: 'OpenRouter (vários modelos, alguns grátis)', tipo: 'openai', base: 'https://openrouter.ai/api/v1', modelo: '', prefixo: /^sk-or-/, ajuda: 'Chave em openrouter.ai/keys. Modelos que terminam em ":free" são gratuitos.' },
+    groq: { nome: 'Groq (grátis)', tipo: 'openai', base: 'https://api.groq.com/openai/v1', modelo: '', prefixo: /^gsk_/, ajuda: 'Chave em console.groq.com/keys.' },
+    xai: { nome: 'xAI (Grok)', tipo: 'openai', base: 'https://api.x.ai/v1', modelo: '', prefixo: /^xai-/, ajuda: 'Chave em console.x.ai.' },
+    github: { nome: 'GitHub Models', tipo: 'openai', base: 'https://models.github.ai/inference', modelo: '', prefixo: /^(ghp_|github_pat_)/, ajuda: 'Token do GitHub com permissão "models".' },
+    openai: { nome: 'OpenAI (ChatGPT)', tipo: 'openai', base: 'https://api.openai.com/v1', modelo: '', prefixo: /^sk-(proj-|svcacct-|admin-)?/, ajuda: 'Chave em platform.openai.com/api-keys.' },
+    deepseek: { nome: 'DeepSeek', tipo: 'openai', base: 'https://api.deepseek.com/v1', modelo: 'deepseek-chat', ajuda: 'Chave em platform.deepseek.com.' },
+    mistral: { nome: 'Mistral', tipo: 'openai', base: 'https://api.mistral.ai/v1', modelo: '', ajuda: 'Chave em console.mistral.ai.' },
+    outro: { nome: 'Outro serviço (compatível com OpenAI)', tipo: 'openai', base: '', modelo: '', ajuda: 'Informe o endereço base da API (ex.: https://servico.com/v1).' }
+  };
+  function detectProvider(key) {
+    key = String(key || '').trim();
+    for (var id in PROVIDERS) if (PROVIDERS[id].prefixo && PROVIDERS[id].prefixo.test(key)) return id;
+    return null;
+  }
+  function curProv() { return PROVIDERS[S.set.provider] ? S.set.provider : 'gemini'; }
+  function curKey() { return (S.set.keys || {})[curProv()] || ''; }
+  function curModel() { var id = curProv(); return ((S.set.models || {})[id] || PROVIDERS[id].modelo || '').trim(); }
+  function curBase() { var id = curProv(); return (id === 'outro' ? S.set.customBase : PROVIDERS[id].base || '').replace(/\/+$/, ''); }
+  var WEB_BLOCK = function (nome) { return nome + ' não permite uso direto pelo navegador do PC. Use o app no celular (APK), escolha outro serviço em Config., ou configure o proxy (ver README).'; };
+
+  // Ponto único de chamada à IA (nome mantido por compatibilidade)
   async function callClaude(o) {
-    var body = { model: S.set.model, max_tokens: o.max_tokens || 4500, system: o.system, messages: o.messages };
+    var id = curProv(), P = PROVIDERS[id];
+    if (!curKey() && !(id === 'anthropic' && S.set.proxyUrl)) throw new Error('Cole a sua chave de API na aba Config. (serviço: ' + P.nome + ').');
+    if (P.tipo === 'gemini') return callGemini(o);
+    if (P.tipo === 'anthropic') return callAnthropic(o);
+    return callOpenAI(o, id, P);
+  }
+  async function postRetry(url, headers, body) {
+    for (var i = 0; i < 5; i++) {
+      var r;
+      try { r = await fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body) }); }
+      catch (e) {
+        if (!isNative() && !S.set.proxyUrl && PROVIDERS[curProv()].tipo === 'openai') throw new Error(WEB_BLOCK(PROVIDERS[curProv()].nome));
+        throw new Error('Sem conexão com o serviço de IA. Verifique a internet.');
+      }
+      if (r.status === 429 || r.status === 500 || r.status === 502 || r.status === 503 || r.status === 529) { await sleep(3000 * (i + 1) * (i + 1)); continue; }
+      var j = await r.json().catch(function () { return {}; });
+      if (r.status === 401 || r.status === 403 || /API key not valid|API_KEY_INVALID|invalid.{0,10}api.{0,3}key|incorrect api key/i.test(JSON.stringify(j))) throw new Error('Chave recusada pelo serviço de IA. Confira a chave e o serviço em Config. (use "Testar conexão").');
+      if (r.status === 404) throw new Error('Este modelo não está disponível para a sua chave. Escolha outro em Config. ("Testar conexão" lista os disponíveis).');
+      if (!r.ok) { var err = new Error(String((j.error && (j.error.message || j.error)) || j.detail || j.message || ('Erro ' + r.status))); err.status = r.status; throw err; }
+      return j;
+    }
+    throw new Error('Serviço ocupado (limite de uso). Aguarde um minuto e tente de novo.');
+  }
+  async function callOpenAI(o, id, P) {
+    var base = curBase(), model = curModel();
+    if (!base) throw new Error('Informe o endereço base da API em Config.');
+    if (!model) throw new Error('Escolha um modelo em Config. ("Testar conexão" lista os disponíveis).');
+    if (P.semNavegador && !isNative() && !S.set.proxyUrl) throw new Error(WEB_BLOCK(P.nome));
+    var url = S.set.proxyUrl ? S.set.proxyUrl.replace(/\/+$/, '') + '/openai' : base + '/chat/completions';
+    var headers = { 'content-type': 'application/json', authorization: 'Bearer ' + curKey() };
+    if (S.set.proxyUrl) { headers['x-target-base'] = base; if (S.set.accessCode) headers['x-access-code'] = S.set.accessCode; }
+    var body = { model: model, max_tokens: Math.max(o.max_tokens || 0, 6000), temperature: 0.7, messages: [{ role: 'system', content: o.system }].concat(o.messages) };
+    var j;
+    for (var k = 0; k < 3; k++) {
+      try { j = await postRetry(url, headers, body); break; }
+      catch (e) {
+        // Modelos mais novos (OpenAI e outros) recusam alguns parâmetros: ajusta e tenta de novo
+        if (e.status === 400 && /max_tokens/.test(e.message) && body.max_tokens) { body.max_completion_tokens = body.max_tokens; delete body.max_tokens; continue; }
+        if (e.status === 400 && /temperature/.test(e.message) && 'temperature' in body) { delete body.temperature; continue; }
+        throw e;
+      }
+    }
+    var m = j && j.choices && j.choices[0] && j.choices[0].message;
+    var out = String((m && m.content) || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    if (!out) throw new Error('A IA não devolveu texto. Tente de novo ou escolha outro modelo em Config.');
+    return out;
+  }
+  var GM_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+  async function callGemini(o) {
+    var model = curModel().replace(/^models\//, '');
+    var j = await postRetry(GM_BASE + '/' + encodeURIComponent(model) + ':generateContent', { 'content-type': 'application/json', 'x-goog-api-key': curKey() }, {
+      systemInstruction: { parts: [{ text: o.system }] },
+      contents: o.messages.map(function (m) { return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }; }),
+      generationConfig: { maxOutputTokens: Math.max(o.max_tokens || 0, 8192), temperature: 0.7 }
+    });
+    if (j.promptFeedback && j.promptFeedback.blockReason) throw new Error('O Gemini recusou o pedido (' + j.promptFeedback.blockReason + '). Reformule o tema ou troque de serviço.');
+    var c = j.candidates && j.candidates[0];
+    var out = c && c.content && c.content.parts ? c.content.parts.filter(function (x) { return !x.thought && x.text; }).map(function (x) { return x.text; }).join('') : '';
+    if (!out.trim()) throw new Error('O Gemini não devolveu texto' + (c && c.finishReason ? ' (' + c.finishReason + ')' : '') + '. Tente de novo.');
+    return out.trim();
+  }
+  async function callAnthropic(o) {
+    var body = { model: curModel() || 'claude-sonnet-5-5', max_tokens: o.max_tokens || 4500, system: o.system, messages: o.messages };
     var url, headers = { 'content-type': 'application/json' };
     if (S.set.proxyUrl) {
       url = S.set.proxyUrl;
       if (S.set.accessCode) headers['x-access-code'] = S.set.accessCode;
     } else {
-      if (!S.set.apiKey) throw new Error('Configure a chave da API (ou o endereço do proxy) na aba Config.');
       url = 'https://api.anthropic.com/v1/messages';
-      headers['x-api-key'] = S.set.apiKey;
+      headers['x-api-key'] = curKey();
       headers['anthropic-version'] = '2023-06-01';
       headers['anthropic-dangerous-direct-browser-access'] = 'true';
     }
-    for (var i = 0; i < 4; i++) {
-      var r = await fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body) });
-      if (r.status === 429 || r.status === 503 || r.status === 529) { await sleep(2500 * (i + 1) * (i + 1)); continue; }
-      var j = await r.json().catch(function () { return {}; });
-      if (!r.ok) throw new Error((j.error && j.error.message) || ('Erro ' + r.status));
-      return (j.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('');
-    }
-    throw new Error('Serviço ocupado. Tente novamente em instantes.');
+    var j = await postRetry(url, headers, body);
+    return (j.content || []).filter(function (b) { return b.type === 'text'; }).map(function (b) { return b.text; }).join('');
+  }
+  // Lista os modelos de texto disponíveis para a chave (usado por "Testar conexão")
+  async function listModels() {
+    var id = curProv(), P = PROVIDERS[id], r, j, names = [];
+    try {
+      if (P.tipo === 'gemini') {
+        r = await fetch(GM_BASE + '?pageSize=200', { headers: { 'x-goog-api-key': curKey() } }); j = await r.json();
+        names = (j.models || []).filter(function (m) { return (m.supportedGenerationMethods || []).indexOf('generateContent') >= 0 && /gemini/i.test(m.name); }).map(function (m) { return m.name.replace(/^models\//, ''); });
+      } else if (P.tipo === 'anthropic') {
+        r = await fetch('https://api.anthropic.com/v1/models', { headers: { 'x-api-key': curKey(), 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' } }); j = await r.json();
+        names = (j.data || []).map(function (m) { return m.id; });
+      } else if (!S.set.proxyUrl) {
+        r = await fetch(curBase() + '/models', { headers: { authorization: 'Bearer ' + curKey() } }); j = await r.json();
+        names = (j.data || j.models || []).map(function (m) { return m.id || m.name; }).filter(Boolean);
+        if (id === 'openrouter') names.sort(function (a, b) { return (/:free$/.test(b) ? 1 : 0) - (/:free$/.test(a) ? 1 : 0); });
+      }
+    } catch (e) { return []; }
+    return names.filter(function (n) { return !/embed|whisper|tts|dall-e|image|audio|moderation|rerank|guard|transcri|realtime|vision|ocr|speech|search-preview/i.test(n); });
   }
 
   /* ---------- leitura de anexos ---------- */
@@ -467,16 +579,20 @@
     $('#v-obra').innerHTML = h;
     renderAtt(); renderSecList();
     $('#b-save').onclick = saveProject;
-    $('#b-all').onclick = async function () { await saveProject(); if (S.cur.title) genAll(true); };
+    $('#b-all').onclick = async function () { syncForm(); if (roteiroPareceTexto(S.cur.roteiro) && !confirm('O roteiro parece um texto corrido e vai gerar muitas seções. Gerar mesmo assim?')) return; await saveProject(); if (S.cur.title) genAll(true); };
     $('#b-redo').onclick = async function () { if (confirm('Refazer todas as seções? O texto atual será substituído.')) { await saveProject(); genAll(false); } };
     $('#b-rot').onclick = async function () {
       syncForm();
-      if (!S.cur.tema) return toast('Escreva o tema primeiro.');
+      var tema = S.cur.tema || S.cur.title;
+      if (!tema && !S.cur.attachments.length) return toast('Escreva o tema ou anexe um texto primeiro.');
+      var mat = S.cur.attachments.length ? Core.rankChunks(S.cur.attachments.map(function (a) { return '[Arquivo: ' + a.name + ']\n' + a.text; }).join('\n\n'), tema + ' ' + (S.cur.subtitle || ''), 20000) : '';
       try {
-        toast('Gerando roteiro…');
-        var out = await callClaude({ max_tokens: 1500, system: 'Você é editor de livros de ensaio. Proponha um roteiro em português do Brasil. Formato estrito: cada capítulo em uma linha começando com "# " e título; sob ele, de 3 a 6 linhas, cada uma um assunto de seção (uma frase curta). Sem numeração, sem comentários.', messages: [{ role: 'user', content: 'Tema da obra: ' + S.cur.tema + (S.cur.attachments.length ? '\n\nMaterial anexado (trecho):\n' + S.cur.attachments[0].text.slice(0, 6000) : '') }] });
-        $('#f-rot').value = out.trim(); syncForm(); renderSecList(); toast('Roteiro sugerido — revise antes de gerar');
+        toast('Gerando roteiro…'); setBusy(true);
+        var out = await callClaude({ max_tokens: 2000, system: 'Você é editor de livros de ensaio. Proponha o roteiro de um livro em português do Brasil. Formato estrito: de 3 a 8 capítulos; cada capítulo em uma linha começando com "# " seguido do título; sob cada capítulo, de 3 a 6 linhas, cada uma o assunto de uma seção (uma frase curta, sem numeração). Não escreva nada além do roteiro.', messages: [{ role: 'user', content: 'Título: ' + (S.cur.title || '') + (S.cur.subtitle ? '\nSubtítulo: ' + S.cur.subtitle : '') + '\nTema: ' + tema + (mat ? '\n\nMaterial do autor (use como base do roteiro):\n' + mat : '') }] });
+        out = out.replace(/```[a-z]*\n?|```/g, '').replace(/\*\*/g, '').split('\n').map(function (l) { return l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').replace(/^\s*#+\s*(?:cap[ií]tulo\s*\d*\s*[:.\-—]\s*)?/i, function (m) { return '# '; }).trim(); }).filter(Boolean).join('\n');
+        $('#f-rot').value = out; syncForm(); renderSecList(); await persist(); toast('Roteiro sugerido — revise antes de gerar');
       } catch (e) { toast(e.message); }
+      setBusy(false);
     };
     $('#f-att').onchange = async function (ev) {
       for (var i = 0; i < ev.target.files.length; i++) {
@@ -506,6 +622,12 @@
     if (s.problems && s.problems.length) h += '<div class="mut" style="color:#BC2E28">' + s.problems.map(esc).join('<br>') + '</div>';
     return h;
   }
+  // Roteiro deve ser lista curta de assuntos. Texto corrido colado ali gera dezenas de seções.
+  function roteiroPareceTexto(rot) {
+    var ls = String(rot || '').split('\n').map(function (l) { return l.trim(); }).filter(Boolean).filter(function (l) { return !/^#/.test(l); });
+    var longas = ls.filter(function (l) { return l.length > 160; }).length;
+    return ls.length > 0 && (longas >= 3 || ls.length > 45);
+  }
   function renderSecList() {
     var el = $('#secs'); if (!el || !S.cur) return;
     var h = '';
@@ -517,7 +639,21 @@
       });
       h += '</div>';
     });
-    el.innerHTML = h || '<p class="mut">Escreva o roteiro acima para listar as seções.</p>';
+    var n = 0; S.cur.chapters.forEach(function (c) { n += c.sections.length; });
+    var aviso = roteiroPareceTexto(S.cur.roteiro) ? '<div class="card" style="border-color:var(--red)"><b style="color:var(--red)">O roteiro parece ser um texto corrido (' + n + ' seções).</b>' +
+      '<div class="mut">O roteiro deve ser uma lista curta: "# Capítulo" e, abaixo, um assunto por linha. Um texto seu deve entrar como anexo.</div>' +
+      '<button class="b red" id="b-conv">Transformar em anexo e sugerir roteiro</button></div>' : '';
+    var html = aviso + (h ? '<div class="mut">' + S.cur.chapters.length + ' capítulo(s), ' + n + ' seção(ões) · cerca de ' + Math.round(n * 900 / 1000) + ' mil palavras</div>' + h : '<p class="mut">Escreva o roteiro acima ou use "Sugerir roteiro com IA".</p>');
+    // Só redesenha se mudou: redesenhar no meio de um clique faria o clique se perder
+    if (el.__html === html) return;
+    el.__html = html; el.innerHTML = html;
+    if ($('#b-conv')) $('#b-conv').onclick = async function () {
+      syncForm();
+      S.cur.attachments.push({ name: 'Texto colado no roteiro.txt', text: S.cur.roteiro });
+      S.cur.roteiro = ''; S.cur.chapters = []; $('#f-rot').value = '';
+      renderAtt(); renderSecList(); await persist();
+      toast('Texto movido para os anexos'); $('#b-rot').click();
+    };
     el.querySelectorAll('[data-g]').forEach(function (b) { b.onclick = function () { var a = b.dataset.g.split(','); genOne(+a[0], +a[1]); }; });
   }
 
@@ -557,10 +693,16 @@
     var s = S.set;
     var h = '<h2>Configurações</h2>' +
       '<div class="card"><b>Motor de IA</b>' +
-      '<label>Chave da API Anthropic (fica só neste aparelho)</label><input id="c-key" type="password" value="' + esc(s.apiKey) + '" placeholder="sk-ant-...">' +
-      '<label>Modelo</label><input id="c-model" value="' + esc(s.model) + '">' +
-      '<label>OU endereço do seu proxy (recomendado para uso compartilhado; ver README)</label><input id="c-proxy" value="' + esc(s.proxyUrl) + '" placeholder="https://seu-worker.workers.dev">' +
-      '<label>Código de acesso do proxy</label><input id="c-code" type="password" value="' + esc(s.accessCode) + '"></div>' +
+      '<label>Chave de API (de qualquer serviço — fica só neste aparelho)</label><input id="c-key" type="password" autocomplete="off" value="' + esc(curKey()) + '" placeholder="Cole aqui a sua chave">' +
+      '<label>Serviço (reconhecido automaticamente pela chave)</label><select id="c-prov">' +
+      Object.keys(PROVIDERS).map(function (id) { return '<option value="' + id + '"' + (curProv() === id ? ' selected' : '') + '>' + PROVIDERS[id].nome + '</option>'; }).join('') + '</select>' +
+      '<div id="c-base-box"' + (curProv() === 'outro' ? '' : ' hidden') + '><label>Endereço base da API</label><input id="c-base" value="' + esc(s.customBase) + '" placeholder="https://servico.com/v1"></div>' +
+      '<label>Modelo</label><input id="c-model" list="c-models" value="' + esc(curModel()) + '" placeholder="toque em Testar conexão para ver a lista"><datalist id="c-models"></datalist>' +
+      '<div id="c-info" class="mut"></div>' +
+      '<details><summary class="mut">Proxy (opcional)</summary>' +
+      '<label>Endereço do seu proxy (ver README)</label><input id="c-proxy" value="' + esc(s.proxyUrl) + '" placeholder="https://seu-worker.workers.dev">' +
+      '<label>Código de acesso do proxy</label><input id="c-code" type="password" value="' + esc(s.accessCode) + '"></details>' +
+      '<div><button class="b" id="c-test">Testar conexão</button></div><div id="c-test-out" class="mut"></div></div>' +
       '<div class="card"><b>Metas de cada seção</b><div class="row">' +
       '<div><label>Mín. palavras</label><input id="c-min" type="number" value="' + s.min + '"></div><div><label>Máx. palavras</label><input id="c-max" type="number" value="' + s.max + '"></div>' +
       '<div><label>Citações % (mín.)</label><input id="c-cit" type="number" value="' + s.cit + '"></div><div><label>Anedotas % (mín.)</label><input id="c-ane" type="number" value="' + s.ane + '"></div>' +
@@ -573,6 +715,33 @@
       '<div class="card"' + (isNative() ? ' hidden' : '') + '><b>Google (opcional)</b><label>Client ID OAuth (tipo “Aplicativo da Web”)</label><input id="c-gid" value="' + esc(s.googleClientId) + '" placeholder="xxxx.apps.googleusercontent.com"><div class="mut">Sem isso o app funciona normalmente, só não envia ao Drive.</div></div>' +
       '<button class="b red" id="c-save">Salvar configurações</button>';
     $('#v-config').innerHTML = h;
+    var info = function () {
+      var id = $('#c-prov').value, P = PROVIDERS[id];
+      $('#c-base-box').hidden = id !== 'outro';
+      $('#c-info').innerHTML = esc(P.ajuda || '') + (P.semNavegador && !isNative() && !S.set.proxyUrl ? '<br><span style="color:var(--red)">No navegador do PC este serviço só funciona com proxy. No app do celular funciona direto.</span>' : '');
+    };
+    info();
+    $('#c-key').oninput = function () {
+      var d = detectProvider(this.value);
+      if (d && d !== $('#c-prov').value) { $('#c-prov').value = d; $('#c-model').value = (S.set.models || {})[d] || PROVIDERS[d].modelo || ''; info(); toast('Chave reconhecida: ' + PROVIDERS[d].nome); }
+    };
+    $('#c-prov').onchange = function () { var id = this.value; $('#c-model').value = (S.set.models || {})[id] || PROVIDERS[id].modelo || ''; $('#c-models').innerHTML = ''; info(); };
+    $('#c-test').onclick = async function () {
+      readCfg(); var out = $('#c-test-out'), b = $('#c-test'), t0 = Date.now();
+      b.disabled = true; out.style.color = ''; out.textContent = 'Testando…';
+      try {
+        var ms = await listModels();
+        if (ms.length) {
+          $('#c-models').innerHTML = ms.map(function (m) { return '<option value="' + esc(m) + '">'; }).join('');
+          if (!curModel()) { S.set.models[curProv()] = ms[0]; $('#c-model').value = ms[0]; saveSet(); }
+        }
+        var r = await callClaude({ max_tokens: 200, system: 'Responda em português, em uma frase curta.', messages: [{ role: 'user', content: 'Diga apenas: conexão funcionando.' }] });
+        out.style.color = '#3a6b3a';
+        out.textContent = '✓ Funcionando com ' + curModel() + ' (' + Math.round((Date.now() - t0) / 1000) + ' s). Resposta: ' + r.slice(0, 80) +
+          (ms.length ? ' · ' + ms.length + ' modelos disponíveis (toque no campo Modelo para escolher), ex.: ' + ms.slice(0, 6).join(', ') : '');
+      } catch (e) { out.style.color = 'var(--red)'; out.textContent = '✗ ' + e.message; }
+      b.disabled = false;
+    };
     $('#c-samples').onchange = async function (ev) {
       for (var i = 0; i < ev.target.files.length; i++) {
         try { var t = (await readFile(ev.target.files[i])).replace(/\s+/g, ' ').trim(); S.set.samples.push(t.slice(Math.floor(t.length * 0.1), Math.floor(t.length * 0.1) + 1800)); S.set.samples = S.set.samples.slice(-3); }
@@ -595,8 +764,11 @@
   function readCfg() {
     var g = function (id) { var e = $('#' + id); return e ? e.value : null; }, s = S.set;
     var v;
-    if ((v = g('c-key')) != null) s.apiKey = v.trim();
-    if ((v = g('c-model')) != null) s.model = v.trim() || DEF.model;
+    if ((v = g('c-prov')) != null) s.provider = v;
+    s.keys = s.keys || {}; s.models = s.models || {};
+    if ((v = g('c-key')) != null) s.keys[s.provider] = v.trim();
+    if ((v = g('c-model')) != null) { if (v.trim()) s.models[s.provider] = v.trim(); else delete s.models[s.provider]; }
+    if ((v = g('c-base')) != null) s.customBase = v.trim();
     if ((v = g('c-proxy')) != null) s.proxyUrl = v.trim();
     if ((v = g('c-code')) != null) s.accessCode = v.trim();
     ['min', 'max', 'cit', 'ane', 'dir'].forEach(function (k) { var x = g('c-' + k); if (x !== null && x !== '') s[k] = +x; });

@@ -41,7 +41,7 @@ const short = `<TITULO>Curto</TITULO><TEXTO>\n### A\n${W(300)}\n</TEXTO><REFS>[]
     calls++; lastBody = JSON.parse(r.request().postData());
     await r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ content: [{ type: 'text', text: calls === 1 ? short : good }] }) });
   });
-  await pg.addInitScript(() => localStorage.setItem('ep_set', JSON.stringify({ apiKey: 'sk-test', author: 'Thiago Carvalho' })));
+  await pg.addInitScript(() => localStorage.setItem('ep_set', JSON.stringify({ provider: 'anthropic', apiKey: 'sk-test', author: 'Thiago Carvalho' })));
   await pg.goto('http://localhost:8765/');
   const R = []; const t = (n, c, info) => R.push([n, !!c, info]);
 
@@ -89,6 +89,91 @@ const short = `<TITULO>Curto</TITULO><TEXTO>\n### A\n${W(300)}\n</TEXTO><REFS>[]
   t('nenhuma requisição externa (tudo embutido)', ext.length === 0, ext.join(' '));
   t('sem erros no console', errs.length === 0, errs.join(' | '));
 
+  // NVIDIA: (a) no navegador sem proxy deve avisar claramente; (b) via proxy, formato OpenAI e <think> removido
+  const p2 = await ctx.newPage(); let nvReq = null;
+  p2.on('pageerror', e => errs.push('nv: ' + e.message));
+  await p2.addInitScript(() => { if (!sessionStorage.getItem('nv')) { sessionStorage.setItem('nv', '1'); localStorage.setItem('ep_set', JSON.stringify({ provider: 'nvidia', nvKey: 'nvapi-teste', author: 'T' })); } });
+  await p2.goto('http://localhost:8765/');
+  await p2.click('#nova'); await p2.fill('#f-title', 'Obra NV'); await p2.fill('#f-rot', '# Cap\nAssunto'); await p2.dispatchEvent('#f-rot', 'change');
+  await p2.click('#b-all'); await p2.waitForTimeout(800);
+  t('NVIDIA sem proxy no navegador: aviso claro', (await p2.textContent('#log')).includes('não permite uso direto pelo navegador'));
+  await p2.route('https://proxy.test/**', async r => { nvReq = { url: r.request().url(), h: r.request().headers(), b: JSON.parse(r.request().postData()) };
+    await r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ choices: [{ message: { content: '<think>raciocínio interno</think>' + good } }] }) }); });
+  await p2.evaluate(() => { const s = JSON.parse(localStorage.getItem('ep_set')); s.proxyUrl = 'https://proxy.test/'; localStorage.setItem('ep_set', JSON.stringify(s)); });
+  await p2.reload(); await p2.click('[data-open]'); await p2.click('#b-redo').catch(() => {});
+  p2.once('dialog', d => d.accept()); await p2.click('#b-redo');
+  await p2.waitForFunction(() => document.querySelector('#log').textContent.includes('✓'), null, { timeout: 15000 }).catch(() => {});
+  const nvLog = await p2.textContent('#log');
+  t('NVIDIA via proxy gera seção', nvLog.includes('✓'), nvLog.trim().split('\n').slice(-2).join(' / ') + ' | toast: ' + await p2.textContent('#toast'));
+  t('NVIDIA (config antiga migrada): rota /openai, chave Bearer, modelo e system', nvReq && nvReq.url === 'https://proxy.test/openai' && nvReq.h['x-target-base'] === 'https://integrate.api.nvidia.com/v1' && nvReq.h.authorization === 'Bearer nvapi-teste' && /gemma/.test(nvReq.b.model) && nvReq.b.messages[0].role === 'system');
+  await p2.click('nav [data-v=texto]');
+  const nvTxt = await p2.$('textarea[data-e]');
+  t('NVIDIA: raciocínio <think> removido do texto', nvTxt && !(await nvTxt.inputValue()).includes('raciocínio interno'));
+
+  // GEMINI: chave no cabeçalho (nunca na URL), formato do Google, partes de "pensamento" ignoradas
+  const p3 = await ctx.newPage(); let gmReq = null;
+  p3.on('pageerror', e => errs.push('gm: ' + e.message));
+  await p3.addInitScript(() => { if (!sessionStorage.getItem('gm')) { sessionStorage.setItem('gm', '1'); localStorage.setItem('ep_set', JSON.stringify({ provider: 'gemini', gmKey: 'AIza-teste', author: 'T' })); } });
+  await p3.route('https://generativelanguage.googleapis.com/**', async r => {
+    const u = r.request().url();
+    if (r.request().method() === 'GET') return r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ models: [{ name: 'models/gemini-4-hydrogen', supportedGenerationMethods: ['generateContent'] }, { name: 'models/text-embedding-9', supportedGenerationMethods: ['embedContent'] }] }) });
+    const b = JSON.parse(r.request().postData()); const isTest = /conexão funcionando/.test(JSON.stringify(b.contents));
+    if (!isTest) gmReq = { url: u, h: r.request().headers(), b };
+    const roteiro = /Material do autor/.test(JSON.stringify(b.contents));
+    const txt = isTest ? 'Conexão funcionando.' : roteiro ? '**# Capítulo 1: A verdade oculta**\n- O ocultamento\n2) A malícia\n## Capítulo 2 — O retorno\nA presença' : good;
+    await r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ candidates: [{ content: { parts: [{ text: 'pensamento interno', thought: true }, { text: txt }] }, finishReason: 'STOP' }] }) });
+  });
+  await p3.goto('http://localhost:8765/');
+  await p3.click('nav [data-v=config]'); await p3.click('#c-test');
+  await p3.waitForFunction(() => /✓|✗/.test(document.querySelector('#c-test-out').textContent), null, { timeout: 8000 }).catch(() => {});
+  const testOut = await p3.textContent('#c-test-out');
+  t('Gemini: "Testar conexão" confirma e lista modelos', testOut.includes('✓') && testOut.includes('gemini-4-hydrogen') && !testOut.includes('embedding'), testOut);
+  // roteiro com texto corrido → aviso → vira anexo → roteiro sugerido
+  await p3.click('nav [data-v=obras]'); await p3.click('#nova'); await p3.fill('#f-title', 'Obra GM');
+  const prosa = Array.from({ length: 6 }, (_, i) => 'Este é um parágrafo longo do ensaio, número ' + i + ', que discute a verdade como algo sempre presente porém deliberadamente encoberto pelas conveniências sociais e pela malícia humana cotidiana.').join('\n');
+  await p3.fill('#f-rot', prosa); await p3.dispatchEvent('#f-rot', 'change');
+  t('Roteiro com texto corrido: aviso aparece', !!(await p3.$('#b-conv')));
+  await p3.click('#b-conv');
+  await p3.waitForFunction(() => document.querySelector('#f-rot').value.includes('# '), null, { timeout: 8000 }).catch(() => {});
+  const rot = await p3.inputValue('#f-rot'), attTxt = await p3.textContent('#att'), secsTxt = await p3.textContent('#secs');
+  t('Texto virou anexo e roteiro foi sugerido e limpo', attTxt.includes('Texto colado no roteiro') && rot === '# A verdade oculta\nO ocultamento\nA malícia\n# O retorno\nA presença' && !(await p3.$('#b-conv')), JSON.stringify(rot) + ' | ' + secsTxt.slice(0, 60));
+  await p3.click('#b-all');
+  await p3.waitForFunction(() => (document.querySelector('#log').textContent.match(/✓/g) || []).length >= 3, null, { timeout: 15000 }).catch(() => {});
+  t('Gemini gera as seções', ((await p3.textContent('#log')).match(/✓/g) || []).length >= 3, (await p3.textContent('#log')).trim().split('\n').slice(-1)[0]);
+  t('Gemini: chave no cabeçalho, não na URL; system e modelo certos', gmReq && gmReq.h['x-goog-api-key'] === 'AIza-teste' && !gmReq.url.includes('AIza') && gmReq.url.endsWith('/gemini-4-hydrogen:generateContent') && /NUNCA use as palavras/.test(gmReq.b.systemInstruction.parts[0].text));
+  await p3.click('nav [data-v=texto]');
+  const gmTxt = await p3.$('textarea[data-e]');
+  t('Gemini: "pensamento interno" não entra no texto', gmTxt && !(await gmTxt.inputValue()).includes('pensamento interno'));
+
+  // QUALQUER CHAVE: detecção automática e serviço genérico (padrão OpenAI) com ajuste de parâmetros
+  const p4 = await ctx.newPage(); const orReqs = [];
+  p4.on('pageerror', e => errs.push('or: ' + e.message));
+  await p4.route('https://openrouter.ai/**', async r => {
+    const u = r.request().url(), H = { 'access-control-allow-origin': '*' };
+    if (u.endsWith('/models')) return r.fulfill({ status: 200, contentType: 'application/json', headers: H, body: JSON.stringify({ data: [{ id: 'openai/text-embedding-3' }, { id: 'acme/pago' }, { id: 'meta-llama/llama-3.3-70b-instruct:free' }] }) });
+    const b = JSON.parse(r.request().postData()); orReqs.push({ h: r.request().headers(), b });
+    if ('max_tokens' in b) return r.fulfill({ status: 400, contentType: 'application/json', headers: H, body: JSON.stringify({ error: { message: "Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens'." } }) });
+    await r.fulfill({ status: 200, contentType: 'application/json', headers: H, body: JSON.stringify({ choices: [{ message: { content: 'Conexão funcionando.' } }] }) });
+  });
+  await p4.goto('http://localhost:8765/'); await p4.click('nav [data-v=config]');
+  await p4.fill('#c-key', 'sk-or-v1-abc123');
+  t('Chave sk-or- reconhecida como OpenRouter', (await p4.inputValue('#c-prov')) === 'openrouter');
+  await p4.fill('#c-key', 'AIzaSyTeste'); const g1 = await p4.inputValue('#c-prov');
+  await p4.fill('#c-key', 'nvapi-xyz'); const g2 = await p4.inputValue('#c-prov');
+  await p4.fill('#c-key', 'gsk_abc'); const g3 = await p4.inputValue('#c-prov');
+  await p4.fill('#c-key', 'sk-ant-api03-x'); const g4 = await p4.inputValue('#c-prov');
+  t('Reconhece Gemini, NVIDIA, Groq e Claude', [g1, g2, g3, g4].join() === 'gemini,nvidia,groq,anthropic', [g1, g2, g3, g4].join());
+  await p4.fill('#c-key', 'sk-or-v1-abc123'); await p4.fill('#c-model', '');
+  await p4.click('#c-test');
+  await p4.waitForFunction(() => /✓|✗/.test(document.querySelector('#c-test-out').textContent), null, { timeout: 8000 }).catch(() => {});
+  const orOut = await p4.textContent('#c-test-out');
+  t('Serviço genérico: lista modelos (grátis primeiro), escolhe um e conecta', orOut.includes('✓ Funcionando com meta-llama/llama-3.3-70b-instruct:free') && !orOut.includes('embedding'), orOut.slice(0, 160));
+  t('Ajusta max_tokens → max_completion_tokens quando o serviço exige', orReqs.length === 2 && orReqs[1].b.max_completion_tokens > 0 && orReqs[0].h.authorization === 'Bearer sk-or-v1-abc123');
+  await p4.click('#c-save');
+  const saved = await p4.evaluate(() => JSON.parse(localStorage.getItem('ep_set')));
+  t('Chave e modelo salvos por serviço', saved.provider === 'openrouter' && saved.keys.openrouter === 'sk-or-v1-abc123' && saved.models.openrouter === 'meta-llama/llama-3.3-70b-instruct:free');
+
+  if (errs.length) console.log('ERROS DE PÁGINA:', errs.join(' | '));
   for (const [n, ok, info] of R) console.log((ok ? 'OK     ' : 'FALHOU ') + n + (info ? '  — ' + info : ''));
   await b.close(); srv.close(); process.exit(R.every(x => x[1]) ? 0 : 1);
 })().catch(e => { console.error(e); process.exit(2); });

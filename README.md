@@ -11,9 +11,25 @@ Gerador de ensaios e livros **no estilo do autor**. Funciona no navegador (insta
 Os dois são atualizados sozinhos a cada mudança enviada a este repositório.
 
 ## Primeiro uso
-1. Crie uma chave em https://console.anthropic.com → **Billing** (compre créditos; a API é cobrada à parte da assinatura do Claude) → **API Keys** → **Create Key**.
-2. No app: **Config.** → cole a chave → **Salvar configurações**. Faça isso em cada aparelho.
-3. (Recomendado) Em **Config. → Seu estilo de escrita**, envie 2 a 3 textos seus e toque em **Extrair perfil de estilo**.
+1. Em **Config.**, cole a sua **chave de API de qualquer serviço**. O app reconhece sozinho de qual serviço ela é.
+2. Toque em **Testar conexão**: o app confirma que funciona e lista os modelos disponíveis para a sua chave.
+3. **Salvar configurações**. Faça isso em cada aparelho; a chave fica só nele, nunca no GitHub.
+4. (Recomendado) Em **Seu estilo de escrita**, envie 2 a 3 textos seus e toque em **Extrair perfil de estilo**.
+
+### Serviços aceitos
+| Serviço | Custo | Onde pegar a chave | Observação |
+|---|---|---|---|
+| Google Gemini | grátis | aistudio.google.com → Chaves de API | Recomendado; funciona no PC e no celular. No plano grátis, o Google pode usar os textos. |
+| NVIDIA | grátis | build.nvidia.com | Só no app do celular (o PC exige proxy). Modelo testado: Gemma 4 31B. |
+| Claude (Anthropic) | pago | console.anthropic.com | Melhor qualidade de escrita. |
+| OpenRouter | alguns grátis | openrouter.ai/keys | Modelos com ":free" são gratuitos. |
+| Groq, xAI, GitHub Models, OpenAI, DeepSeek, Mistral | varia | site de cada um | |
+| Outro | — | — | Qualquer serviço no padrão OpenAI: informe o endereço base. |
+
+Se um serviço bloquear o uso pelo navegador do PC, o app avisa; no app do celular (APK) todos funcionam direto.
+
+## Roteiro
+O roteiro é uma **lista curta**: `# Título do capítulo` e, abaixo, um assunto por linha. Um texto seu (rascunho, ensaio) deve entrar como **anexo**. Se você colar um texto corrido no roteiro, o app avisa e oferece transformá-lo em anexo e sugerir o roteiro automaticamente.
 
 ## O que ele faz
 - **Estrutura**: capítulo › seção › subseção, numeradas (1 › 1.1 › 1.1.1). Nunca menciona "pontos".
@@ -33,7 +49,7 @@ Os dois são atualizados sozinhos a cada mudança enviada a este repositório.
 - Custo: o da API, cerca de 2 a 4 chamadas por seção (por causa das correções automáticas).
 
 ## Opcionais
-- **Proxy**: cole `proxy-worker.js` num Cloudflare Worker (plano gratuito), defina `ANTHROPIC_API_KEY` e `ACCESS_CODE`, e informe o endereço e o código em Config. Útil para dividir o app sem entregar a chave.
+- **Proxy**: cole `proxy-worker.js` num Cloudflare Worker (plano gratuito), defina `ACCESS_CODE` (e `ANTHROPIC_API_KEY`, se usar Claude pelo proxy) e informe o endereço e o código em Config. Serve para usar no PC serviços que bloqueiam o navegador (como a NVIDIA) e para dividir o app sem entregar a chave.
 - **Google Drive**: Google Cloud Console › Credenciais › ID do cliente OAuth › *Aplicativo da Web* › origem JavaScript autorizada `https://psitgcarvalho-byte.github.io`. Cole o Client ID em Config. No APK, use o botão de exportar, que abre o menu Compartilhar (dali dá para enviar ao Drive).
 
 ## Desenvolvimento
