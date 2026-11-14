@@ -175,6 +175,17 @@ const short = `<TITULO>Curto</TITULO><TEXTO>\n### A\n${W(300)}\n</TEXTO><REFS>[]
   const saved = await p4.evaluate(() => JSON.parse(localStorage.getItem('ep_set')));
   t('Chave e modelo salvos por serviço', saved.provider === 'openrouter' && saved.keys.openrouter === 'sk-or-v1-abc123' && saved.models.openrouter === 'meta-llama/llama-3.3-70b-instruct:free');
 
+  // Conta sem saldo (como a resposta real da DeepSeek): mensagem clara, sem repetir à toa
+  let dsCalls = 0;
+  await p4.route('https://api.deepseek.com/**', async r => { dsCalls++; await r.fulfill({ status: 402, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ error: { message: 'Insufficient Balance', type: 'insufficient_balance_error' } }) }); });
+  await p4.click('nav [data-v=obras]'); await p4.click('nav [data-v=config]');
+  await p4.fill('#c-key', 'sk-0123456789abcdef0123456789abcdef');
+  t('DeepSeek: modelo padrão atual', (await p4.inputValue('#c-model')) === 'deepseek-flash');
+  await p4.click('#c-test');
+  await p4.waitForFunction(() => /✓|✗/.test(document.querySelector('#c-test-out').textContent), null, { timeout: 8000 }).catch(() => {});
+  const dsOut = await p4.textContent('#c-test-out');
+  t('Sem saldo: aviso claro e sem tentativas repetidas', dsOut.includes('sem saldo') && dsCalls <= 2, dsOut + ' (' + dsCalls + ' chamadas)');
+
   if (errs.length) console.log('ERROS DE PÁGINA:', errs.join(' | '));
   for (const [n, ok, info] of R) console.log((ok ? 'OK     ' : 'FALHOU ') + n + (info ? '  — ' + info : ''));
   await b.close(); srv.close(); process.exit(R.every(x => x[1]) ? 0 : 1);

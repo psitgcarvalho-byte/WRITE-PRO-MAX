@@ -81,7 +81,7 @@
     groq: { nome: 'Groq (grátis)', tipo: 'openai', base: 'https://api.groq.com/openai/v1', modelo: '', prefixo: /^gsk_/, ajuda: 'Chave em console.groq.com/keys.' },
     xai: { nome: 'xAI (Grok)', tipo: 'openai', base: 'https://api.x.ai/v1', modelo: '', prefixo: /^xai-/, ajuda: 'Chave em console.x.ai.' },
     github: { nome: 'GitHub Models', tipo: 'openai', base: 'https://models.github.ai/inference', modelo: '', prefixo: /^(ghp_|github_pat_)/, ajuda: 'Token do GitHub com permissão "models".' },
-    deepseek: { nome: 'DeepSeek (barato)', tipo: 'openai', base: 'https://api.deepseek.com/v1', modelo: 'deepseek-chat', prefixo: /^sk-[0-9a-f]{32}$/, ajuda: 'Chave em platform.deepseek.com. Cobra por uso, com preço baixo.' },
+    deepseek: { nome: 'DeepSeek (barato)', tipo: 'openai', base: 'https://api.deepseek.com/v1', modelo: 'deepseek-flash', prefixo: /^sk-[0-9a-f]{32}$/, ajuda: 'Chave em platform.deepseek.com. Cobra por uso, com preço baixo.' },
     openai: { nome: 'OpenAI (ChatGPT)', tipo: 'openai', base: 'https://api.openai.com/v1', modelo: '', prefixo: /^sk-(proj-|svcacct-|admin-)?/, ajuda: 'Chave em platform.openai.com/api-keys.' },
     mistral: { nome: 'Mistral', tipo: 'openai', base: 'https://api.mistral.ai/v1', modelo: '', ajuda: 'Chave em console.mistral.ai.' },
     outro: { nome: 'Outro serviço (compatível com OpenAI)', tipo: 'openai', base: '', modelo: '', ajuda: 'Informe o endereço base da API (ex.: https://servico.com/v1).' }
@@ -116,6 +116,7 @@
       if (r.status === 429 || r.status === 500 || r.status === 502 || r.status === 503 || r.status === 529) { await sleep(3000 * (i + 1) * (i + 1)); continue; }
       var j = await r.json().catch(function () { return {}; });
       if (r.status === 401 || r.status === 403 || /API key not valid|API_KEY_INVALID|invalid.{0,10}api.{0,3}key|incorrect api key/i.test(JSON.stringify(j))) throw new Error('Chave recusada pelo serviço de IA. Confira a chave e o serviço em Config. (use "Testar conexão").');
+      if (r.status === 402 || /insufficient.{0,3}balance|insufficient_quota|exceeded your current quota|billing/i.test(JSON.stringify(j))) throw new Error('A chave funciona, mas a conta do serviço está sem saldo/créditos. Adicione créditos no site do serviço ou use um serviço grátis (Gemini).');
       if (r.status === 404) throw new Error('Este modelo não está disponível para a sua chave. Escolha outro em Config. ("Testar conexão" lista os disponíveis).');
       if (!r.ok) { var err = new Error(String((j.error && (j.error.message || j.error)) || j.detail || j.message || ('Erro ' + r.status))); err.status = r.status; throw err; }
       return j;
