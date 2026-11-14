@@ -14,10 +14,10 @@ label{display:block;font-size:14px;color:var(--mut);margin:12px 0 4px}
 input,textarea,select{width:100%;font:inherit;font-size:16px;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:9px}
 textarea{min-height:120px;resize:vertical}
 textarea.big{min-height:260px}
-button.b{font:inherit;font-size:15px;background:var(--ink);color:var(--bg);border:0;border-radius:6px;padding:9px 14px;margin:4px 6px 4px 0;cursor:pointer}
-button.b.red{background:var(--red)}
-button.b.ghost{background:none;color:var(--ink);border:1px solid var(--ink)}
-button.b:disabled{opacity:.45;cursor:wait}
+.b{display:inline-block;font:inherit;font-size:15px;background:var(--ink);color:var(--bg);border:0;border-radius:6px;padding:9px 14px;margin:4px 6px 4px 0;cursor:pointer}
+.b.red{background:var(--red)}
+.b.ghost{background:none;color:var(--ink);border:1px solid var(--ink)}
+.b:disabled{opacity:.45;cursor:wait}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:10px 0}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .row>*{flex:1 1 140px}

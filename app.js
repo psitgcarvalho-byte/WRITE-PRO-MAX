@@ -407,7 +407,7 @@
 
   function renderObras() {
     var h = '<h2>Suas obras</h2><button class="b red" id="nova">+ Nova obra</button>' +
-      '<label class="b ghost" style="display:inline-block;width:auto;color:var(--ink);font-size:15px">Importar backup (.json)<input type="file" id="imp" accept=".json,application/json" hidden></label>';
+      '<label class="b ghost">Importar backup (.json)<input type="file" id="imp" accept=".json,application/json" hidden></label>';
     if (!S.projects.length) h += '<p class="mut">Nenhuma obra ainda. Tudo fica salvo neste aparelho, sem precisar de login.</p>';
     S.projects.sort(function (a, b) { return b.updated - a.updated; }).forEach(function (p) {
       var n = 0, d = 0; p.chapters.forEach(function (c) { c.sections.forEach(function (s) { n++; if (s.raw) d++; }); });
