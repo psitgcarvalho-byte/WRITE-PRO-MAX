@@ -141,6 +141,7 @@ const short = `<TITULO>Curto</TITULO><TEXTO>\n### A\n${W(300)}\n</TEXTO><REFS>[]
   await p3.waitForFunction(() => (document.querySelector('#log').textContent.match(/✓/g) || []).length >= 3, null, { timeout: 15000 }).catch(() => {});
   t('Gemini gera as seções', ((await p3.textContent('#log')).match(/✓/g) || []).length >= 3, (await p3.textContent('#log')).trim().split('\n').slice(-1)[0]);
   t('Gemini: chave no cabeçalho, não na URL; system e modelo certos', gmReq && gmReq.h['x-goog-api-key'] === 'AIza-teste' && !gmReq.url.includes('AIza') && gmReq.url.endsWith('/gemini-4-hydrogen:generateContent') && /NUNCA use as palavras/.test(gmReq.b.systemInstruction.parts[0].text));
+  t('Gemini: limite folgado e raciocínio reduzido (evita MAX_TOKENS sem texto)', gmReq && gmReq.b.generationConfig.maxOutputTokens >= 32768 && gmReq.b.generationConfig.thinkingConfig && gmReq.b.generationConfig.thinkingConfig.thinkingLevel === 'low');
   await p3.click('nav [data-v=texto]');
   const gmTxt = await p3.$('textarea[data-e]');
   t('Gemini: "pensamento interno" não entra no texto', gmTxt && !(await gmTxt.inputValue()).includes('pensamento interno'));

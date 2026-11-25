@@ -149,18 +149,39 @@
     return out;
   }
   var GM_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+  // Nos modelos Gemini com "raciocínio" (thinking), os tokens de pensamento contam no mesmo limite
+  // da resposta (maxOutputTokens). Com limite baixo, o modelo gasta tudo pensando e devolve zero
+  // texto (finishReason MAX_TOKENS). Por isso: limite folgado, raciocínio reduzido e nova tentativa.
+  var GM_OUT = 32768, GM_OUT_MAX = 65536;
   async function callGemini(o) {
     var model = curModel().replace(/^models\//, '');
-    var j = await postRetry(GM_BASE + '/' + encodeURIComponent(model) + ':generateContent', { 'content-type': 'application/json', 'x-goog-api-key': curKey() }, {
+    var url = GM_BASE + '/' + encodeURIComponent(model) + ':generateContent', headers = { 'content-type': 'application/json', 'x-goog-api-key': curKey() };
+    var gc = { maxOutputTokens: Math.max(o.max_tokens || 0, GM_OUT), temperature: 0.7, thinkingConfig: { thinkingLevel: 'low' } };
+    var body = {
       systemInstruction: { parts: [{ text: o.system }] },
       contents: o.messages.map(function (m) { return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }; }),
-      generationConfig: { maxOutputTokens: Math.max(o.max_tokens || 0, 8192), temperature: 0.7 }
-    });
-    if (j.promptFeedback && j.promptFeedback.blockReason) throw new Error('O Gemini recusou o pedido (' + j.promptFeedback.blockReason + '). Reformule o tema ou troque de serviço.');
-    var c = j.candidates && j.candidates[0];
-    var out = c && c.content && c.content.parts ? c.content.parts.filter(function (x) { return !x.thought && x.text; }).map(function (x) { return x.text; }).join('') : '';
-    if (!out.trim()) throw new Error('O Gemini não devolveu texto' + (c && c.finishReason ? ' (' + c.finishReason + ')' : '') + '. Tente de novo.');
-    return out.trim();
+      generationConfig: gc
+    };
+    var j, c, out = '', tries = 0, ampliado = false;
+    while (tries++ < 6) {
+      try { j = await postRetry(url, headers, body); }
+      catch (e) {
+        // Modelo não aceita algum ajuste: troca/remove e tenta de novo
+        if (e.status === 400 && /thinking.?level/i.test(e.message) && gc.thinkingConfig && 'thinkingLevel' in gc.thinkingConfig) { gc.thinkingConfig = { thinkingBudget: 2048 }; continue; }
+        if (e.status === 400 && /thinking/i.test(e.message) && gc.thinkingConfig) { delete gc.thinkingConfig; continue; }
+        if (e.status === 400 && /max.?output.?tokens|output token/i.test(e.message) && gc.maxOutputTokens > 8192) { gc.maxOutputTokens = 8192; ampliado = true; continue; }
+        throw e;
+      }
+      if (j.promptFeedback && j.promptFeedback.blockReason) throw new Error('O Gemini recusou o pedido (' + j.promptFeedback.blockReason + '). Reformule o tema ou troque de serviço.');
+      c = j.candidates && j.candidates[0];
+      out = c && c.content && c.content.parts ? c.content.parts.filter(function (x) { return !x.thought && x.text; }).map(function (x) { return x.text; }).join('') : '';
+      if (out.trim()) return out.trim();
+      // Sem texto por falta de espaço: amplia o limite uma vez e tenta de novo
+      if (c && c.finishReason === 'MAX_TOKENS' && !ampliado) { ampliado = true; gc.maxOutputTokens = GM_OUT_MAX; continue; }
+      break;
+    }
+    if (c && c.finishReason === 'MAX_TOKENS') throw new Error('O Gemini gastou todo o limite "pensando" e não escreveu o texto. Tente de novo ou escolha outro modelo Gemini em Config. (ex.: um "flash").');
+    throw new Error('O Gemini não devolveu texto' + (c && c.finishReason ? ' (' + c.finishReason + ')' : '') + '. Tente de novo.');
   }
   async function callAnthropic(o) {
     var body = { model: curModel() || 'claude-sonnet-5-5', max_tokens: o.max_tokens || 4500, system: o.system, messages: o.messages };
